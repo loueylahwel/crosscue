@@ -6,21 +6,20 @@ directions relative to themselves, and relay each other's messages hop by hop, s
 
 The name comes from cross-cueing: one sensor's detection cues every other sensor onto the same target.
 
-Status: **SANDTABLE (the 3D simulation) works.** FTX (PC webcam plus Android phone) and the SPOTREP mobile
-app are next. See the roadmap below.
+This repository holds SANDTABLE, a 3D simulation of the idea, and FTX, the tools for running it with real
+devices: printable markers, a webcam observer, a WebSocket relay and a phone capability check.
 
 ## Names used in this project
 
 | Name | What it is | Where |
 |---|---|---|
 | CROSSCUE | The whole project | this repo |
-| SANDTABLE | Stage 1: the 3D simulation used to rehearse the idea | `src/sim/` |
-| FTX | Stage 2: field training exercise with a PC webcam observer, an Android phone viewer and an accuracy rig | planned |
-| SPOTREP | Stage 3: the native Android app. Also the name for one sighting message | `Observation` in `src/core/types.ts` |
+| SANDTABLE | The 3D simulation used to rehearse the idea | `src/sim/` |
+| FTX | Field training exercise: the tools for real devices (markers, observer, relay, phone check) | `src/live/`, `server/` |
+| SPOTREP | One sighting message | `Observation` in `src/core/types.ts` |
 | DATUM | The shared world frame, defined by a printed marker | `src/core/transform.ts` |
 | COP | Common operating picture: every sighting fused into tracks | `src/core/worldModel.ts` |
 | RETRANS | The multi-hop mesh relay | `src/core/mesh.ts` |
-| CEP50 / CEP95 | Accuracy: radius around the true position that holds 50% / 95% of the estimates | FTX accuracy rig, planned |
 
 ## Quick start
 
@@ -70,6 +69,48 @@ shows each agent's believed position as a ring joined to its real position by a 
 
 From the browser console, `__sim.run(5)` fast-forwards five simulated seconds.
 
+## FTX: real devices
+
+```bash
+npm run dev
+```
+
+```bash
+npm run relay
+```
+
+| Page (on the PC, http://localhost:5173/...) | What it does |
+|---|---|
+| `src/live/markers.html` | Printable marker sheets: the origin (ID 0) and the target (ID 1), ArUco ARUCO_MIP_36h12 at an exact size in millimetres, with a 100 mm line to check the printer did not scale |
+| `src/live/observer.html` | Webcam observer: detects both markers, defines DATUM from the origin, computes the target's position in the shared frame with an expected error, and publishes it over the relay. Has a built-in test scene with known truth, so it can be tried without a webcam |
+| `src/live/xrcheck.html` | Phone check: reports what the phone's browser supports for AR (WebXR session, hit test, DOM overlay, camera access, depth, anchors) and sends the report back to the PC |
+
+Observer, step by step:
+
+1. Print the sheets at 100% and measure each black square with a ruler.
+2. Tape the origin sheet flat on the floor where the webcam sees it. Stand the target sheet upright facing the
+   webcam (a marker lying flat is foreshortened too much to be read beyond about 4 m).
+3. Open the observer, pick the webcam and type the measured sizes.
+4. Calibrate the field of view once per webcam: target 2 to 4 m beyond the origin, roughly straight away from
+   the camera, centre-to-centre distance measured with a tape. A wrong field of view scales every distance.
+5. Press Lock DATUM (30 frames are averaged; outlier frames are dropped). The grid drawn on the floor should
+   sit on the real floor.
+6. Tick Publish. Every node connected to the relay receives the sightings.
+
+A phone on USB reaches the PC's pages and relay through `adb reverse`, which Chrome treats as a secure origin:
+
+```bash
+adb reverse tcp:5173 tcp:5173
+```
+
+```bash
+adb reverse tcp:8787 tcp:8787
+```
+
+The relay is the radio, not the mesh: it only carries one transmission to the sender's direct neighbours, and
+each node floods, deduplicates and counts TTL itself. `npm run relay -- --links A-B,B-C` restricts who hears
+whom, so A reaches C only through B; `--log packets.jsonl` records every transmission.
+
 ## DATUM: how devices agree on where things are
 
 A sighting starts out relative to the observer: "3 m ahead, 40 degrees to my left". Nobody else can use that.
@@ -94,35 +135,32 @@ src/core/          pure TypeScript, no DOM, unit-tested
   transport.ts       the only interface the mesh knows about the network
   simNetwork.ts      deterministic radio simulator (range, loss, latency) implementing Transport
   geometry.ts        wall line of sight, field of view, collisions
+  camera.ts          marker pose from four corners, floor ray, DATUM from the origin marker, error model
 src/sim/           SANDTABLE: world, simulation engine, Three.js scene, HUD
+src/live/          FTX pages: markers, observer, xrcheck; marker detection, sub-pixel corners,
+                   FOV calibration, synthetic test images, WebSocket transport
+src/vendor/        js-aruco2 marker detector (MIT), as ES modules
+server/relay.ts    FTX WebSocket relay
 tests/             vitest suites
-docs/protocol.md   language-neutral message format, for the native port
+docs/protocol.md   language-neutral message format
 ```
 
-The simulator, the planned WebSocket relay (FTX) and Nearby Connections (SPOTREP app) all implement the same
-`Transport` interface, so the mesh and fusion logic is written and tested once.
+The simulator and the WebSocket relay implement the same `Transport` interface, so the mesh and fusion logic
+is written and tested once.
 
-## Roadmap
+## Accuracy
 
-- [x] M0: core library and tests
-- [x] M1: SANDTABLE with through-wall ghosts
-- [x] M2: radio range, RETRANS relay, loss, noise and drift, live metrics, relay-chain scenario
-- [ ] M3: phone checks (WebXR `immersive-ar`, `camera-access`, `adb reverse`) and PC marker detection
-- [ ] M4: FTX observer page, relay server and phone viewer with DATUM alignment
-- [ ] M5: FTX accuracy rig against measured ground truth, reported as CEP50 / CEP95
-- [ ] M6: object detection on the PC webcam
-- [ ] M7: SPOTREP native Android app with a Bluetooth / Wi-Fi mesh
+Marker position from one webcam, measured on synthetic images (1280 x 720, 65 degree field of view, ideal lens,
+15 cm marker standing upright; a real webcam will do somewhat worse):
 
-## Honest accuracy expectations
+| Distance from the camera | 2 m | 3 m | 4 m | 5 m | 6 m | 7 m |
+|---|---|---|---|---|---|---|
+| RMS error | 0.3 cm | 1.0 cm | 2.9 cm | 4.1 cm | 4.2 cm | 8.9 cm |
 
-These are estimates until the FTX measurements replace them: roughly 10 to 30 cm at house scale.
+Depth comes from the marker's apparent size, so its error grows with the square of the distance; a bigger
+marker helps proportionally. The observer reports this expected error with every sighting.
 
-- A printed marker seen by a fixed webcam at 1 to 3 m is good to a few centimetres.
+- A field of view that is 1 degree off scales every distance by about 2%, which is 10 cm at 5 m.
 - One degree of heading error costs about 9 cm at 5 m.
 - Phone motion tracking drifts as you walk; studies of smartphone AR report position errors above 10 cm.
 - Outdoors, GPS alone is only good to 3 to 5 m.
-
-## Note
-
-CROSSCUE is a personal research prototype for cooperative perception. It is not affiliated with any
-defence program or company.

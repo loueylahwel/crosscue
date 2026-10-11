@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>CROSSCUE XR Check</title>
+    <link rel="stylesheet" href="./live.css" />
+    <style>
+      #overlay { display: none; position: fixed; inset: 0; pointer-events: none; }
+      #overlay .box { position: absolute; left: 12px; right: 12px; bottom: 24px; pointer-events: auto;
+        background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 12px 14px; }
+      #overlay .big { font-size: 16px; }
+      td:first-child { white-space: nowrap; }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>CROSSCUE XR check</h1>
+      <p class="dim">
+        Finds out what this phone's browser can do for the FTX viewer. Run the AR test, move the phone slowly
+        and point it at the floor until it ends. The result is sent back to the PC automatically.
+      </p>
+      <div class="row">
+        <button id="start" class="primary" disabled>Run AR test (6 s)</button>
+        <button id="copy">Copy report</button>
+        <span id="sent" class="dim"></span>
+      </div>
+      <h2>Browser</h2>
+      <table id="static"></table>
+      <h2>AR session</h2>
+      <table id="session"><tr><td class="dim">Not run yet.</td></tr></table>
+    </main>
+    <div id="overlay">
+      <div class="box">
+        <div class="big">Testing AR: move the phone slowly and point it at the floor.</div>
+        <div id="live" class="dim"></div>
+        <div class="row"><button id="stop">End now</button></div>
+      </div>
+    </div>
+    <script type="module" src="./xrcheck.ts"></script>
+  </body>
+</html>

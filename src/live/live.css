@@ -1,0 +1,40 @@
+/* Shared look for the FTX pages (xrcheck, markers, observer, viewer). Same palette as SANDTABLE. */
+:root {
+  color-scheme: dark;
+  --bg: #0b0f14;
+  --panel: rgba(16, 22, 30, 0.92);
+  --line: #26303c;
+  --text: #d7dee7;
+  --dim: #8593a3;
+  --accent: #22d3ee;
+  --own: #4ade80;
+  --warn: #facc15;
+  --bad: #f87171;
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; background: var(--bg); color: var(--text);
+  font: 14px/1.5 system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif; }
+main { max-width: 760px; margin: 0 auto; padding: 16px; }
+h1 { font-size: 18px; margin: 0 0 4px; }
+h2 { font-size: 11px; letter-spacing: 0.09em; text-transform: uppercase; color: var(--dim); margin: 18px 0 6px; font-weight: 600; }
+p { margin: 6px 0; }
+.dim { color: var(--dim); }
+a { color: var(--accent); }
+code { font: 12.5px ui-monospace, 'Cascadia Mono', Consolas, monospace; color: var(--accent); }
+button { font: inherit; color: var(--text); background: #1b2531; border: 1px solid var(--line); border-radius: 8px;
+  padding: 8px 14px; cursor: pointer; }
+button:hover { border-color: #3a4a5c; }
+button:disabled { opacity: 0.5; cursor: default; }
+button.primary { border-color: var(--accent); color: var(--accent); }
+button.on { border-color: var(--accent); color: var(--accent); }
+input, select { font: inherit; color: var(--text); background: #111821; border: 1px solid var(--line); border-radius: 6px; padding: 4px 8px; }
+input[type='range'] { accent-color: var(--accent); padding: 0; }
+.row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin: 8px 0; }
+table { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; }
+th { color: var(--dim); font-weight: 500; text-align: left; padding: 4px 8px 4px 0; border-bottom: 1px solid var(--line); }
+td { padding: 4px 8px 4px 0; border-bottom: 1px solid #161e28; vertical-align: top; }
+.ok { color: var(--own); }
+.warn { color: var(--warn); }
+.bad { color: var(--bad); }
+.card { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px; margin: 10px 0; }
+pre { white-space: pre-wrap; word-break: break-word; font: 12px/1.45 ui-monospace, Consolas, monospace; color: var(--dim); margin: 0; }

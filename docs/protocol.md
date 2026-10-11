@@ -2,7 +2,7 @@
 
 Language-neutral description of what two nodes exchange. In CROSSCUE terms an Observation is a SPOTREP and
 the mesh relay is RETRANS. The TypeScript reference is `src/core/types.ts`
-and `src/core/mesh.ts`; a Kotlin port must behave the same.
+and `src/core/mesh.ts`; any other implementation must behave the same.
 
 ## World frame W
 
@@ -51,9 +51,3 @@ Target size: about 50 bytes in a compact binary encoding (the simulator uses JSO
   velocity, uncertainty growing with age.
 - Age tracks by **local receive time**. Out-of-order messages are detected by `seq` per origin.
 - Show tracks as stale after about 2.5 s without an update and drop them after about 10 s.
-
-## Open questions (to settle with Stage 2 data)
-
-- Clock offset estimation between devices, to compensate multi-hop latency for moving targets.
-- Whether to add a re-anchor message (marker sightings shared between devices) to cancel drift jointly.
-- Binary encoding (CBOR / protobuf) and a protocol version byte.

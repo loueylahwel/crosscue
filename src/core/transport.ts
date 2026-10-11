@@ -2,9 +2,8 @@ import type { NodeId, Packet } from './types';
 
 /**
  * The only thing the mesh logic knows about the network. Implementations:
- *   SimNetwork transport (range-limited, lossy)  - Stage 1
- *   WebSocket relay transport                    - Stage 2
- *   Nearby Connections / BLE (native Android)    - Stage 3
+ *   SimNetwork (range-limited, lossy radio simulator)  src/core/simNetwork.ts
+ *   WebSocketTransport (over the FTX relay)            src/live/wsTransport.ts
  */
 export interface Transport {
   readonly id: NodeId;

@@ -1,0 +1,83 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>CROSSCUE Observer</title>
+    <link rel="stylesheet" href="./live.css" />
+    <style>
+      html, body { height: 100%; overflow: hidden; }
+      canvas#view { position: fixed; top: 0; bottom: 0; right: 0; left: 360px; width: calc(100vw - 360px); height: 100vh; display: block; }
+      #panel { position: fixed; top: 0; left: 0; bottom: 0; width: 360px; overflow-y: auto; background: var(--panel);
+        border-right: 1px solid var(--line); padding: 12px 14px 20px; font-size: 13px; }
+      #panel h2 { margin-top: 14px; }
+      .grid { display: grid; grid-template-columns: auto 1fr; gap: 4px 10px; align-items: center; }
+      .grid input[type='number'], .grid input[type='text'], .grid select { width: 100%; }
+      .grid input[type='range'] { width: 100%; }
+      .read { font-variant-numeric: tabular-nums; }
+      .read div { display: flex; justify-content: space-between; gap: 8px; }
+      .read b { font-weight: 500; color: var(--text); }
+      .pill { display: inline-block; padding: 1px 8px; border-radius: 999px; border: 1px solid currentColor; font-size: 11.5px; }
+      button { padding: 5px 10px; }
+      @media (max-width: 760px) {
+        canvas#view { left: 0; width: 100vw; height: 45vh; }
+        #panel { top: 45vh; width: 100vw; border-right: none; border-top: 1px solid var(--line); }
+      }
+    </style>
+  </head>
+  <body>
+    <canvas id="view"></canvas>
+    <aside id="panel">
+      <h1>CROSSCUE observer</h1>
+      <p class="dim">FTX fixed camera. Sees the target marker and publishes its position in the shared frame.</p>
+
+      <h2>Camera</h2>
+      <div class="grid">
+        <label for="source">Source</label>
+        <select id="source"></select>
+        <label for="hfov">Horizontal FOV</label>
+        <div class="row" style="margin:0"><input id="hfov" type="range" min="30" max="120" step="0.1" style="flex:1" /><span id="hfovVal" class="read"></span></div>
+      </div>
+      <label class="row" id="freezeRow"><input id="freeze" type="checkbox" /> Freeze the test target</label>
+      <div id="camInfo" class="dim read"></div>
+
+      <h2>Markers (measured black square, mm)</h2>
+      <div class="grid">
+        <label for="size0">Origin, ID 0</label><input id="size0" type="number" step="0.5" min="20" />
+        <label for="size1">Target, ID 1</label><input id="size1" type="number" step="0.5" min="20" />
+      </div>
+
+      <h2>DATUM</h2>
+      <div class="row">
+        <button id="lock" class="primary">Lock DATUM</button>
+        <button id="unlock">Unlock</button>
+        <span id="datumState" class="pill"></span>
+      </div>
+      <div id="datumInfo" class="read dim"></div>
+
+      <h2>Target</h2>
+      <div id="targetInfo" class="read"></div>
+
+      <h2>Calibrate FOV</h2>
+      <p class="dim" style="margin-top:0">
+        A wrong FOV scales every distance, so do this once per webcam. Stand the target 2 to 4 m beyond the origin,
+        roughly straight away from the camera, measure centre to centre with a tape (metres), keep both in view and
+        press Calibrate.
+      </p>
+      <div class="row">
+        <input id="calDist" type="number" step="0.01" min="0.3" placeholder="metres" style="width:90px" />
+        <button id="calibrate">Calibrate</button>
+        <span id="calState" class="dim"></span>
+      </div>
+
+      <h2>Publish (RETRANS)</h2>
+      <div class="grid">
+        <label for="relayUrl">Relay</label><input id="relayUrl" type="text" />
+        <label for="nodeId">Node id</label><input id="nodeId" type="text" />
+      </div>
+      <label class="row"><input id="publish" type="checkbox" /> Publish target sightings</label>
+      <div id="netInfo" class="read dim"></div>
+    </aside>
+    <script type="module" src="./observer.ts"></script>
+  </body>
+</html>
