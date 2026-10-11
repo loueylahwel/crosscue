@@ -52,6 +52,7 @@ export default defineConfig({
         xrcheck: resolve(root, 'src/live/xrcheck.html'),
         markers: resolve(root, 'src/live/markers.html'),
         observer: resolve(root, 'src/live/observer.html'),
+        viewer: resolve(root, 'src/live/viewer.html'),
       },
     },
   },

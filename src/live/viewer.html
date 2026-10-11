@@ -1,0 +1,65 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0" />
+    <title>CROSSCUE Viewer</title>
+    <link rel="stylesheet" href="./live.css" />
+    <style>
+      .grid { display: grid; grid-template-columns: auto 1fr; gap: 6px 10px; align-items: center; }
+      .grid input { width: 100%; }
+      canvas.map { width: 100%; aspect-ratio: 1; display: block; background: #070b10; border: 1px solid var(--line); border-radius: 10px; }
+      #tracks div { display: flex; justify-content: space-between; gap: 8px; font-variant-numeric: tabular-nums; }
+
+      /* AR overlay (shown over the camera image during the session) */
+      #overlay { display: none; position: fixed; inset: 0; font: 15px/1.4 system-ui, sans-serif; color: #fff; }
+      #overlay .bar { position: absolute; left: 10px; right: 10px; padding: 10px 12px; border-radius: 12px;
+        background: rgba(8, 12, 17, 0.72); border: 1px solid rgba(255, 255, 255, 0.12); }
+      #overlay .top { top: 10px; }
+      #overlay .bottom { bottom: 14px; display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+      #overlay button { font-size: 15px; padding: 9px 14px; }
+      #overlay .status { flex: 1; min-width: 120px; font-size: 13px; color: #cbd5e1; }
+      #overlay canvas.map { position: absolute; right: 10px; bottom: 76px; width: 34vw; max-width: 180px; opacity: 0.9; }
+      #labels { position: absolute; inset: 0; pointer-events: none; overflow: hidden; }
+      .label { position: absolute; left: 0; top: 0; white-space: nowrap; padding: 3px 9px; border-radius: 999px;
+        border: 1.5px solid currentColor; background: rgba(8, 12, 17, 0.78); font-size: 13px; display: flex; gap: 6px; align-items: center; }
+      .label .arrow { display: none; width: 0; height: 0; border-left: 10px solid currentColor;
+        border-top: 6px solid transparent; border-bottom: 6px solid transparent; }
+      .label.edge .arrow { display: inline-block; }
+    </style>
+  </head>
+  <body>
+    <main id="start">
+      <h1>CROSSCUE viewer</h1>
+      <p class="dim">
+        Shows every target the other nodes report, at its real place, through walls. Start AR, then align with the
+        origin marker by tapping its centre and the middle of its right-hand edge.
+      </p>
+      <div class="grid">
+        <label for="relayUrl">Relay</label><input id="relayUrl" type="text" />
+        <label for="nodeId">Node id</label><input id="nodeId" type="text" />
+      </div>
+      <div class="row">
+        <button id="startAr" class="primary" disabled>Start AR</button>
+        <span id="arSupport" class="dim"></span>
+      </div>
+      <div id="net" class="dim"></div>
+      <h2>Map (top down, 1 m grid, origin marker at the centre)</h2>
+      <canvas id="mapStart" class="map" width="600" height="600"></canvas>
+      <h2>Tracks</h2>
+      <div id="tracks" class="dim">None yet.</div>
+    </main>
+
+    <div id="overlay">
+      <div id="labels"></div>
+      <div class="bar top" id="instruction"></div>
+      <canvas id="mapAr" class="map" width="360" height="360"></canvas>
+      <div class="bar bottom">
+        <button id="realign">Re-align</button>
+        <button id="exit">Exit</button>
+        <span class="status" id="arStatus"></span>
+      </div>
+    </div>
+    <script type="module" src="./viewer.ts"></script>
+  </body>
+</html>
