@@ -1,0 +1,76 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Shared Vision Sim</title>
+    <style>
+      :root {
+        color-scheme: dark;
+        --bg: #0b0f14;
+        --panel: rgba(16, 22, 30, 0.92);
+        --line: #26303c;
+        --text: #d7dee7;
+        --dim: #8593a3;
+        --accent: #22d3ee;
+        --own: #4ade80;
+        --warn: #facc15;
+        --bad: #f87171;
+      }
+      * { box-sizing: border-box; }
+      html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text); overflow: hidden;
+        font: 12.5px/1.45 system-ui, -apple-system, 'Segoe UI', sans-serif; }
+      canvas#view { position: fixed; inset: 0; width: 100vw; height: 100vh; display: block; }
+      #labels { position: fixed; inset: 0; pointer-events: none; overflow: hidden; }
+      .ghost-label { position: absolute; left: 0; top: 0; white-space: nowrap; padding: 2px 7px; border-radius: 999px;
+        border: 1px solid currentColor; background: rgba(8, 12, 17, 0.78); font-size: 11.5px; display: flex; gap: 6px; align-items: center; }
+      .ghost-label .arrow { display: none; font-size: 13px; line-height: 1; }
+      .ghost-label.clamped .arrow { display: inline-block; }
+
+      #panel { position: fixed; top: 10px; left: 10px; bottom: 10px; width: 330px; overflow-y: auto; background: var(--panel);
+        border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px 14px; backdrop-filter: blur(6px); }
+      #panel.collapsed { bottom: auto; width: auto; overflow: hidden; }
+      #panel.collapsed .body { display: none; }
+      #panel h1 { font-size: 14px; margin: 0 0 2px; display: flex; justify-content: space-between; align-items: center; }
+      #panel h2 { font-size: 10.5px; letter-spacing: 0.09em; text-transform: uppercase; color: var(--dim); margin: 14px 0 6px; font-weight: 600; }
+      #panel p.sub { color: var(--dim); margin: 0 0 4px; }
+      button { font: inherit; color: var(--text); background: #1b2531; border: 1px solid var(--line); border-radius: 6px; padding: 4px 9px; cursor: pointer; }
+      button:hover { border-color: #3a4a5c; }
+      button.on { border-color: var(--accent); color: var(--accent); }
+      .row { display: flex; gap: 6px; flex-wrap: wrap; margin: 4px 0; }
+      .agent { display: flex; gap: 4px; margin: 3px 0; }
+      .agent .pick { flex: 1; text-align: left; display: flex; align-items: center; gap: 7px; }
+      .dot { width: 9px; height: 9px; border-radius: 50%; display: inline-block; }
+      .ctl { display: grid; grid-template-columns: 1fr 52px; gap: 2px 8px; align-items: center; margin: 6px 0; }
+      .ctl label { color: var(--text); }
+      .ctl .val { text-align: right; color: var(--accent); font-variant-numeric: tabular-nums; }
+      .ctl input[type='range'] { grid-column: 1 / -1; width: 100%; accent-color: var(--accent); margin: 0; }
+      .chk { display: flex; gap: 8px; align-items: center; margin: 5px 0; cursor: pointer; }
+      .hint { color: var(--dim); font-size: 11.5px; margin-top: 2px; }
+      table { width: 100%; border-collapse: collapse; font-size: 11.5px; font-variant-numeric: tabular-nums; }
+      th { color: var(--dim); font-weight: 500; text-align: left; padding: 2px 4px 2px 0; border-bottom: 1px solid var(--line); }
+      td { padding: 2px 4px 2px 0; }
+      td.bad { color: var(--bad); } td.ok { color: var(--own); } td.warn { color: var(--warn); }
+      #hud { position: fixed; top: 12px; left: calc(350px + (100vw - 350px) / 2); transform: translateX(-50%); padding: 5px 12px; border-radius: 999px;
+        background: var(--panel); border: 1px solid var(--line); white-space: nowrap; pointer-events: none; }
+      #hud b { color: var(--accent); }
+      #legend { position: fixed; left: 355px; bottom: 12px; display: flex; gap: 12px; align-items: center; padding: 5px 12px;
+        border-radius: 999px; background: var(--panel); border: 1px solid var(--line); color: var(--dim); font-size: 11.5px; }
+      .sw { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 5px; vertical-align: -1px; }
+      @media (max-width: 760px) { #panel { width: 290px; } #legend { display: none; } }
+    </style>
+  </head>
+  <body>
+    <canvas id="view"></canvas>
+    <div id="labels"></div>
+    <div id="hud"></div>
+    <div id="legend">
+      <span><i class="sw" style="background:#ef4444"></i>real target (hidden by walls)</span>
+      <span><i class="sw" style="background:#4ade80"></i>ghost: you see it</span>
+      <span><i class="sw" style="background:#22d3ee"></i>ghost: shared by others</span>
+      <span><i class="sw" style="background:#9ca3af"></i>stale</span>
+    </div>
+    <aside id="panel"></aside>
+    <script type="module" src="/src/sim/main.ts"></script>
+  </body>
+</html>
