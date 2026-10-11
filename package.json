@@ -1,9 +1,9 @@
 {
-  "name": "shared-vision",
+  "name": "crosscue",
   "private": true,
   "version": "0.1.0",
   "type": "module",
-  "description": "Shared-vision prototype: devices share detected targets in a common world frame so others can see them through walls.",
+  "description": "CROSSCUE: cooperative sighting over a mesh. One device sees a target, every device sees it through the walls.",
   "scripts": {
     "dev": "vite",
     "build": "tsc --noEmit && vite build",

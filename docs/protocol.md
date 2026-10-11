@@ -1,6 +1,7 @@
-# Shared Vision wire protocol (v0, draft)
+# CROSSCUE wire protocol (v0, draft)
 
-Language-neutral description of what two nodes exchange. The TypeScript reference is `src/core/types.ts`
+Language-neutral description of what two nodes exchange. In CROSSCUE terms an Observation is a SPOTREP and
+the mesh relay is RETRANS. The TypeScript reference is `src/core/types.ts`
 and `src/core/mesh.ts`; a Kotlin port must behave the same.
 
 ## World frame W

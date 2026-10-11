@@ -65,9 +65,16 @@ export class Ui {
     const p = this.panel;
     p.innerHTML = '';
     const head = document.createElement('h1');
-    head.innerHTML = '<span>Shared Vision · simulation</span>';
-    const collapse = this.button('–', () => p.classList.toggle('collapsed'));
-    collapse.title = 'Collapse panel';
+    head.innerHTML = '<span>CROSSCUE · SANDTABLE</span>';
+    const collapse = this.button('Hide', () => {
+      p.classList.toggle('collapsed');
+      collapse.textContent = p.classList.contains('collapsed') ? 'Show' : 'Hide';
+    });
+    collapse.title = 'Collapse or expand the panel';
+    if (window.innerWidth < 760) {
+      p.classList.add('collapsed');
+      collapse.textContent = 'Show';
+    }
     head.append(collapse);
     p.append(head);
 
@@ -79,7 +86,7 @@ export class Ui {
     sub.textContent = 'One agent sees a target; everyone sees it through the walls.';
     body.append(sub);
 
-    body.append(this.h2('Viewer (keys 1–4)'));
+    body.append(this.h2('Viewer (keys 1-4)'));
     this.sim.agents.forEach((a, i) => {
       const row = document.createElement('div');
       row.className = 'agent';
@@ -100,7 +107,7 @@ export class Ui {
     sc.className = 'row';
     sc.append(
       this.button('Patrol', () => this.sim.applyScenario('patrol')),
-      this.button('Relay chain A–B–C', () => this.sim.applyScenario('chain')),
+      this.button('Relay chain A-B-C', () => this.sim.applyScenario('chain')),
       this.button('Reset (R)', () => this.sim.reset()),
       this.button('Swap view (Tab)', () => this.swapView()),
     );
@@ -235,7 +242,7 @@ export class Ui {
     while (this.labelPool.length < labels.length) {
       const d = document.createElement('div');
       d.className = 'ghost-label';
-      d.innerHTML = '<span class="arrow">▶</span><span class="txt"></span>';
+      d.innerHTML = '<span class="arrow"></span><span class="txt"></span>';
       this.labelsRoot.append(d);
       this.labelPool.push(d);
     }
@@ -286,8 +293,8 @@ export class Ui {
         return (
           `<tr${ps}><td><span class="dot" style="background:${hex(a.cfg.color)}"></span> ${a.cfg.name}</td>` +
           `<td class="${pc}">${posErr.toFixed(0)} cm</td><td class="${yc}">${yawErr.toFixed(1)}°</td>` +
-          `<td>${a.received ? a.latencyEma.toFixed(0) + ' ms' : '–'}</td><td>${a.received ? a.hopsEma.toFixed(1) : '–'}</td>` +
-          `<td>${[...a.seeing].join(',') || '–'}</td></tr>`
+          `<td>${a.received ? a.latencyEma.toFixed(0) + ' ms' : '-'}</td><td>${a.received ? a.hopsEma.toFixed(1) : '-'}</td>` +
+          `<td>${[...a.seeing].join(',') || '-'}</td></tr>`
         );
       })
       .join('');

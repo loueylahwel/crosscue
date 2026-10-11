@@ -7,7 +7,6 @@ const sim = new Sim();
 const scene = new SimScene(canvas, sim);
 const panel = document.getElementById('panel')!;
 const ui = new Ui(sim, scene, panel);
-if (window.innerWidth < 760) panel.classList.add('collapsed');
 
 // ---- input ------------------------------------------------------------------------------------
 
