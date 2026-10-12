@@ -19,6 +19,10 @@
       .read b { font-weight: 500; color: var(--text); }
       .pill { display: inline-block; padding: 1px 8px; border-radius: 999px; border: 1px solid currentColor; font-size: 11.5px; }
       button { padding: 5px 10px; }
+      #accPoints table { font-size: 12px; margin: 6px 0; }
+      #accPoints th, #accPoints td { padding: 3px 6px 3px 0; }
+      #accPoints th + th, #accPoints td + td { text-align: right; white-space: nowrap; }
+      #accPoints td:first-child { word-break: break-word; }
       @media (max-width: 760px) {
         canvas#view { left: 0; width: 100vw; height: 45vh; }
         #panel { top: 45vh; width: 100vw; border-right: none; border-top: 1px solid var(--line); }
@@ -57,6 +61,40 @@
 
       <h2>Target</h2>
       <div id="targetInfo" class="read"></div>
+
+      <h2>Accuracy</h2>
+      <p class="dim" style="margin-top:0">
+        Put the target marker on a tape-measured spot, type where it is in W and record. Every estimate is compared
+        with that truth.
+      </p>
+      <div class="grid">
+        <label for="accLabel">Point</label><input id="accLabel" type="text" maxlength="24" />
+        <label for="accX" class="acc-truth">X (m)</label><input id="accX" class="acc-truth" type="number" step="0.01" />
+        <label for="accZ" class="acc-truth">Z (m)</label><input id="accZ" class="acc-truth" type="number" step="0.01" />
+        <label for="accY" class="acc-truth">Height Y (m)</label><input id="accY" class="acc-truth" type="number" step="0.01" />
+        <label for="accN">Frames per point</label><input id="accN" type="number" min="1" max="1000" step="1" />
+      </div>
+      <p class="dim acc-truth">
+        Measured from the origin marker's centre: +X towards its right-hand edge, +Z towards its printed bottom edge.
+        Height: the centre of the target's black square above the floor, 0 when it lies flat.
+      </p>
+      <p id="accTest" class="ok" style="display:none">Test scene: truth is known for every frame.</p>
+      <div class="row">
+        <button id="accRecord" class="primary">Record point</button>
+        <button id="accCancel" style="display:none">Cancel</button>
+        <span id="accState" class="dim"></span>
+      </div>
+      <div id="accPoints" class="read"></div>
+      <p class="dim">
+        Error: horizontal error of the mean estimate. Spread: scatter around that mean. CEP50 / CEP95: horizontal
+        radius around the truth holding 50% / 95% of the estimates. Sigma ratio: actual error over expected, about 1
+        when the expected error is honest.
+      </p>
+      <div class="row">
+        <button id="accUndo">Undo last point</button>
+        <button id="accNew">New session</button>
+        <button id="accDownload">Download JSON</button>
+      </div>
 
       <h2>Calibrate FOV</h2>
       <p class="dim" style="margin-top:0">

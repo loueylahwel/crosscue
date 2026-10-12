@@ -1,5 +1,6 @@
 /// <reference types="webxr" />
 import * as THREE from 'three';
+import { checkTap, quantile } from '../core/accuracy';
 import { MeshNode } from '../core/mesh';
 import { alignFromTwoPoints, toLocal, toWorld } from '../core/transform';
 import type { Pose4, Vec3 } from '../core/types';
@@ -16,6 +17,7 @@ import { WebSocketTransport } from './wsTransport';
  */
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
+const esc = (s: string) => s.replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`);
 const settings = loadSetting('viewer', { relayUrl: `ws://${location.hostname || 'localhost'}:8787`, nodeId: 'PHONE' });
 
 // ---- network and COP --------------------------------------------------------------------------
@@ -64,6 +66,10 @@ function realign(): void {
   ar.anchorOrigin?.delete();
   ar.anchorX?.delete();
   Object.assign(ar, { phase: 'origin', tapOrigin: null, tapX: null, anchorOrigin: null, anchorX: null, align: null });
+  // a new alignment starts a new check session, so its CEP is not mixed with the old alignment's
+  if (session) checks.session = new Date().toISOString();
+  checks.note = { text: '', bad: false };
+  openChecks(false); // a pending check would be scored against the old alignment
 }
 
 function updateAlign(): void {
@@ -73,6 +79,198 @@ function updateAlign(): void {
   } catch {
     /* taps coincide: keep the previous alignment */
   }
+}
+
+// ---- accuracy checks --------------------------------------------------------------------------
+
+/**
+ * Tap checks against the real room, scored by src/core/accuracy.ts and posted to the PC
+ * (.local/reports/viewercheck.jsonl, read by `npm run accuracy`). "point": the ring on a tape-measured
+ * spot, which scores the alignment and the phone's tracking. "target": the ring on the floor right under
+ * the real target marker, which scores the fused track (the tap goes through the same alignment).
+ * Once aligned, floor taps are ignored; an armed check takes the next one.
+ */
+type CheckKind = 'point' | 'target';
+
+/** One check, as posted. dx, dz: estimate minus truth in W, metres. */
+interface ViewerCheck {
+  session: string;
+  kind: CheckKind;
+  label: string;
+  truth: Vec3;
+  tapped: Vec3; // W, the floor point under the ring
+  est: Vec3; // W, what was scored: the tap for "point", the track on the floor for "target"
+  dx: number;
+  dz: number;
+  err2d: number;
+  trackSigma: number | null;
+  hops: number | null;
+  track: string | null; // key of the scored track
+}
+
+const TARGET_TRACK = 'tag-1'; // the id the observer gives the target marker (ID 1)
+const KIND_ONE = { point: 'known point', target: 'target foot' };
+const KIND_MANY = { point: 'Known points', target: 'Target feet' };
+
+const checks = {
+  session: null as string | null, // ISO time the current alignment started (each AR session and each Re-align)
+  open: false,
+  armed: null as CheckKind | null,
+  list: [] as ViewerCheck[], // every check since the page loaded
+  unsent: 0, // checks the PC did not store
+  note: { text: '', bad: false },
+};
+
+const r5 = (v: number) => Math.round(v * 1e5) / 1e5; // 0.01 mm keeps the PC's log readable
+const r5v = (v: Vec3): Vec3 => [r5(v[0]), r5(v[1]), r5(v[2])];
+const cmText = (m: number) => `${Math.round(m * 100)} cm`;
+const signedCm = (m: number) => {
+  const r = Math.round(m * 100);
+  return r > 0 ? `+${r}` : `${r}`;
+};
+
+/** A typed coordinate in metres; takes a decimal comma and the Unicode minus some keyboards insert. */
+function readMetres(id: string): number | null {
+  const s = $<HTMLInputElement>(id).value.trim().replace(/\u2212/g, '-').replace(',', '.');
+  const v = Number(s);
+  return s && Number.isFinite(v) ? v : null;
+}
+
+/** The typed spot on the floor in W, or null until X and Z are both numbers. */
+function checkSpot(): Vec3 | null {
+  const x = readMetres('checkX');
+  const z = readMetres('checkZ');
+  return x === null || z === null ? null : [x, 0, z];
+}
+
+function checkLabel(): string {
+  return $<HTMLInputElement>('checkLabel').value.trim().slice(0, 40) || `C${checks.list.length + 1}`;
+}
+
+/** The track a target check scores: the observer's target marker when known, else the freshest live track. */
+function checkTrack(now: number): TrackView | null {
+  const tracks = cop.current(now);
+  return tracks.find((t) => t.key.endsWith(TARGET_TRACK)) ?? tracks.filter((t) => !t.stale).sort((a, b) => a.ageMs - b.ageMs)[0] ?? null;
+}
+
+/** Why a check of this kind cannot run now, or null when it can. */
+function checkProblem(kind: CheckKind, now: number): string | null {
+  if (ar.phase !== 'aligned' || !ar.align) return 'Not aligned yet.';
+  if (kind === 'point') {
+    const spot = checkSpot();
+    if (!spot) return 'Type the spot\'s X and Z in metres first.';
+    return Math.hypot(spot[0], spot[2]) > 30 ? 'Over 30 m from the origin: type metres, not centimetres.' : null;
+  }
+  const t = checkTrack(now);
+  if (!t) return 'No target track: nothing has been reported yet.';
+  return t.stale ? `The target track is stale (last report ${(t.ageMs / 1000).toFixed(0)} s ago).` : null;
+}
+
+function checkLine(c: ViewerCheck): string {
+  const track = c.trackSigma === null ? '' : `, track sigma ${cmText(c.trackSigma)}`;
+  return `${c.label} ${KIND_ONE[c.kind]}: ${cmText(c.err2d)} off (dx ${signedCm(c.dx)}, dz ${signedCm(c.dz)})${track}`;
+}
+
+/** n, CEP50 and CEP95 for each kind in the list. */
+function checkSummary(list: ViewerCheck[]): string {
+  const parts: string[] = [];
+  for (const kind of ['point', 'target'] as const) {
+    const errs = list.filter((c) => c.kind === kind).map((c) => c.err2d);
+    if (errs.length) parts.push(`${KIND_MANY[kind]} n ${errs.length}, CEP50 ${cmText(quantile(errs, 0.5))}, CEP95 ${cmText(quantile(errs, 0.95))}`);
+  }
+  return parts.join('; ');
+}
+
+/** Every check since the page loaded, by alignment, so they can be read back after the session. */
+function checksHtml(): string {
+  if (!checks.list.length) return 'None yet.';
+  const sessions = [...new Set(checks.list.map((c) => c.session))];
+  const html = sessions.map((s) => {
+    const list = checks.list.filter((c) => c.session === s);
+    const head = `<div class="sess">Alignment ${esc(new Date(s).toLocaleTimeString())}: ${esc(checkSummary(list))}</div>`;
+    return head + list.map((c) => `<div>${esc(checkLine(c))}</div>`).join('');
+  });
+  return html.join('') + (checks.unsent ? `<div class="warn">${checks.unsent} not stored on the PC.</div>` : '');
+}
+
+/** The Check button and panel follow the state; called after every change, not every frame. */
+function renderChecks(): void {
+  $('check').hidden = ar.phase !== 'aligned';
+  $('check').classList.toggle('on', checks.open);
+  $('checkPanel').hidden = !checks.open;
+  $('checkEdit').hidden = !!checks.armed; // while aiming only the buttons stay, so the ring is not covered
+  for (const [kind, id, text] of [
+    ['point', 'checkPoint', 'Tap known point'],
+    ['target', 'checkTarget', 'Tap target foot'],
+  ] as const) {
+    $(id).textContent = checks.armed === kind ? 'Cancel' : text;
+    $(id).classList.toggle('on', checks.armed === kind);
+  }
+  $('checkNote').textContent = checks.note.text;
+  $('checkNote').className = checks.note.bad ? 'warn' : '';
+  const mine = checks.list.filter((c) => c.session === checks.session);
+  $('checkSummary').textContent =
+    (mine.length ? `This alignment: ${checkSummary(mine)}.` : 'No checks yet with this alignment.') + (checks.unsent ? ` ${checks.unsent} not stored on the PC.` : '');
+}
+
+function openChecks(open: boolean): void {
+  checks.open = open;
+  if (!open) checks.armed = null;
+  renderChecks();
+}
+
+/** Arm a check for the next floor tap; pressing the armed button again cancels it. */
+function armCheck(kind: CheckKind): void {
+  (document.activeElement as HTMLElement | null)?.blur(); // close the keyboard so the floor is in view
+  if (checks.armed === kind) {
+    checks.armed = null;
+  } else {
+    const problem = checkProblem(kind, performance.now());
+    checks.armed = problem ? null : kind;
+    if (problem) checks.note = { text: problem, bad: true };
+    else if (checks.note.bad) checks.note = { text: '', bad: false }; // an old refusal no longer applies; a result stays
+  }
+  renderChecks();
+}
+
+/** Score the armed check with the floor point under the ring. Without a floor hit it stays armed. */
+function runCheck(kind: CheckKind): void {
+  const now = performance.now();
+  const hit = ar.hitPos;
+  const align = ar.align;
+  const problem = checkProblem(kind, now);
+  if (problem || !align) {
+    checks.armed = null;
+    checks.note = { text: problem ?? 'Not aligned yet.', bad: true };
+  } else if (!hit) {
+    checks.note = { text: 'No floor under the ring. Point at the floor and tap again.', bad: true };
+  } else {
+    const session = (checks.session ??= new Date().toISOString());
+    const label = checkLabel();
+    let c: ViewerCheck;
+    if (kind === 'point') {
+      const r = checkTap(align, hit, checkSpot()!);
+      const tapped = r5v(r.tappedW);
+      c = { session, kind, label, truth: r5v(r.truthW), tapped, est: tapped, dx: r5(r.dx), dz: r5(r.dz), err2d: r5(r.err2d), trackSigma: null, hops: null, track: null };
+    } else {
+      const t = checkTrack(now)!;
+      const est: Vec3 = r5v([t.pos[0], 0, t.pos[2]]);
+      // the tap is the truth here and the track the estimate; checkTap scores tap minus truth, so flip the signs
+      const r = checkTap(align, hit, est);
+      const tapped = r5v(r.tappedW);
+      c = { session, kind, label, truth: tapped, tapped, est, dx: r5(-r.dx), dz: r5(-r.dz), err2d: r5(r.err2d), trackSigma: r5(t.sigma), hops: t.lastHops, track: t.key };
+    }
+    checks.list.push(c);
+    checks.armed = null;
+    checks.note = { text: checkLine(c), bad: false };
+    $<HTMLInputElement>('checkLabel').value = `C${checks.list.length + 1}`;
+    postReport('viewercheck', { event: 'check', ...c }).then((ok) => {
+      if (ok) return;
+      checks.unsent++;
+      renderChecks();
+    });
+  }
+  renderChecks();
 }
 
 // ---- top-down map (works with or without AR) -------------------------------------------------------
@@ -145,10 +343,15 @@ function describe(t: TrackView): string {
 
 // ---- start screen loop (no AR) ----------------------------------------------------------------
 
+let checksShown = '';
+
 function startScreen(): void {
   const tracks = cop.current(performance.now());
   drawMap($<HTMLCanvasElement>('mapStart'), tracks);
-  $('tracks').innerHTML = tracks.length ? tracks.map((t) => `<div><span>${describe(t)}</span></div>`).join('') : 'None yet.';
+  // node ids and labels come from other devices, so they are escaped like the typed check labels
+  $('tracks').innerHTML = tracks.length ? tracks.map((t) => `<div><span>${esc(describe(t))}</span></div>`).join('') : 'None yet.';
+  const html = checksHtml();
+  if (html !== checksShown) $('checks').innerHTML = checksShown = html; // only on change, so the list can be selected and copied
   const t = transport;
   $('net').textContent = t ? `Relay ${t.status}, neighbours: ${t.neighbors().join(', ') || 'none'}, received ${t.stats.received}${t.notice ? `, ${t.notice}` : ''}` : '';
 }
@@ -292,6 +495,12 @@ function placeLabel(el: HTMLDivElement, world: THREE.Vector3, cam: THREE.Camera,
 }
 
 function instruction(): string {
+  if (checks.armed && ar.phase === 'aligned') {
+    if (!ar.hitPos) return 'Check: point at the floor until the white ring appears.';
+    const spot = checkSpot();
+    const where = checks.armed === 'target' ? 'the floor right under the target marker' : spot ? `the spot X ${spot[0]}, Z ${spot[2]}` : 'the spot';
+    return `Check ${checkLabel()}: put the ring on ${where} and tap.`;
+  }
   if (!ar.hitPos && ar.phase !== 'aligned') return 'Move the phone slowly and point at the floor until the white ring appears.';
   if (ar.phase === 'origin') return 'Put the ring on the CENTRE of the origin marker and tap the screen.';
   if (ar.phase === 'xaxis') return 'Now put the ring on the middle of the marker\'s RIGHT-HAND edge and tap.';
@@ -328,6 +537,7 @@ async function startAr(): Promise<void> {
     overlay.style.display = 'none';
     $('start').style.display = '';
     ar.me = null;
+    openChecks(false);
   });
 
   let last = performance.now();
@@ -343,7 +553,7 @@ async function startAr(): Promise<void> {
     const hp = hits[0]?.getPose(ref);
     ar.hit = hits[0] ?? null;
     ar.hitPos = hp ? [hp.transform.position.x, hp.transform.position.y, hp.transform.position.z] : null;
-    reticle.visible = !!hp && ar.phase !== 'aligned';
+    reticle.visible = !!hp && (ar.phase !== 'aligned' || !!checks.armed);
     if (hp) reticle.position.set(...ar.hitPos!);
 
     // anchors keep the two taps where ARCore now believes they are
@@ -396,6 +606,10 @@ async function startAr(): Promise<void> {
 }
 
 function onSelect(): void {
+  if (checks.armed && ar.phase === 'aligned') {
+    runCheck(checks.armed);
+    return;
+  }
   if (ar.phase === 'aligned' || !ar.hitPos) return;
   const p = [...ar.hitPos] as Vec3;
   const hit = ar.hit;
@@ -417,12 +631,25 @@ function onSelect(): void {
       return;
     }
     ar.phase = 'aligned';
+    renderChecks();
     postReport('viewer', { event: 'aligned', tapOrigin: ar.tapOrigin, tapX: ar.tapX, align: ar.align, edgeDistance: Math.hypot(ar.tapX![0] - ar.tapOrigin![0], ar.tapX![2] - ar.tapOrigin![2]) });
   }
 }
 
-// Buttons on the overlay must not also count as taps on the floor.
-overlay.querySelector('.bottom')!.addEventListener('beforexrselect', (e) => e.preventDefault());
+// Buttons and the check panel on the overlay must not also count as taps on the floor.
+for (const el of [overlay.querySelector('.bottom')!, $('checkPanel')]) el.addEventListener('beforexrselect', (e) => e.preventDefault());
+$('check').addEventListener('click', () => openChecks(!checks.open));
+$('checkClose').addEventListener('click', () => openChecks(false));
+$('checkPoint').addEventListener('click', () => armCheck('point'));
+$('checkTarget').addEventListener('click', () => armCheck('target'));
+for (const id of ['checkX', 'checkZ']) {
+  $(`${id}Sign`).addEventListener('click', () => {
+    const el = $<HTMLInputElement>(id);
+    const v = el.value.trim().replace(/^\u2212/, '-');
+    el.value = v.startsWith('-') ? v.slice(1) : `-${v}`;
+  });
+}
+$<HTMLInputElement>('checkLabel').value = 'C1';
 $('realign').addEventListener('click', realign);
 $('exit').addEventListener('click', () => session?.end());
 $('startAr').addEventListener('click', () => startAr());
@@ -440,5 +667,5 @@ $('startAr').addEventListener('click', () => startAr());
 
 connect();
 
-// Debug handle for the browser console.
-(window as unknown as { __viewer: unknown }).__viewer = { cop, ar, settings, startScreen };
+// Debug handle for the browser console: with ar.hitPos set, __viewer.select() acts as a tap on the floor.
+(window as unknown as { __viewer: unknown }).__viewer = { cop, ar, checks, settings, startScreen, select: onSelect };

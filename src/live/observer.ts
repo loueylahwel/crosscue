@@ -13,24 +13,29 @@ import {
   type RigidPose,
   type Vec2,
 } from '../core/camera';
+import { accuracyStats, type AccuracyFrame } from '../core/accuracy';
 import { dist, length } from '../core/math';
 import { MeshNode } from '../core/mesh';
 import type { Vec3 } from '../core/types';
 import { MarkerDetector, ORIGIN_ID, TARGET_ID, type Detection } from './aruco';
 import { calibrateHfov, type CalSample } from './calibrate';
+import { postReport } from './report';
 import { loadSetting, saveSetting } from './settings';
 import { lookAtCamera, renderScene, type SceneMarker } from './synthetic';
 import { WebSocketTransport } from './wsTransport';
 
 /**
  * FTX observer: a fixed webcam that sees the origin marker (DATUM) and the target marker, and
- * publishes the target's position in the shared world frame W over the relay.
+ * publishes the target's position in the shared world frame W over the relay. It also records
+ * accuracy points: the target at a tape-measured spot, every estimate compared with that truth.
  */
 
 const TEST = 'test';
 const LOCK_FRAMES = 30;
 const PUBLISH_MS = 100;
 const CORNER_NOISE_PX = 0.5; // assumed corner noise for the error model
+const NO_FIX_MS = 10_000; // a recording gives up after this long without a target fix
+const MAX_PER_POINT = 1000;
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
 const view = $<HTMLCanvasElement>('view');
@@ -116,6 +121,7 @@ async function listCameras(): Promise<void> {
 }
 
 async function useSource(id: string): Promise<void> {
+  if (recorder.active && id !== settings.source) stopRecording('Aborted: the source changed.'); // a new camera may send no frames for a while
   stream?.getTracks().forEach((t) => t.stop());
   stream = null;
   settings.source = id;
@@ -237,6 +243,7 @@ function process(img: ImageData): void {
     if (state.calibrating.samples.length >= 20) finishCalibration();
   }
 
+  recordFrame();
   publish();
   state.procMs = performance.now() - t0;
 }
@@ -321,6 +328,224 @@ function publish(): void {
   if (now - lastPublish < PUBLISH_MS) return;
   lastPublish = now;
   mesh.publish({ t: now, label: 'tag', id: `tag-${TARGET_ID}`, pos: state.target.pos, sigma: state.target.sigma });
+}
+
+// ---- accuracy recorder ------------------------------------------------------------------------
+
+/** One recorded frame: an AccuracyFrame plus the corner fit and pose, which help explain outliers. */
+interface RecordedFrame extends AccuracyFrame {
+  rms: number; // px
+  upright: boolean;
+}
+
+/** One point as it is posted to /api/report/accuracy, so the page, the PC log and the download agree. */
+interface PointLine {
+  event: 'point';
+  session: string;
+  id: string; // the ISO time the point started; an undo line names the point by it
+  label: string;
+  source: 'test' | 'webcam';
+  hfov: number;
+  sizes: { origin: number; target: number }; // m
+  datum: { locked: boolean; frames?: number; sigma?: number; angleSigma?: number };
+  truth: Vec3 | null; // null in the test scene, where every frame carries its own truth
+  frames: RecordedFrame[];
+}
+
+interface RecordedPoint {
+  line: PointLine;
+  stored: boolean | null; // whether the PC stored it; null while it has not answered
+}
+
+interface Recording {
+  label: string;
+  truth: Vec3 | null; // typed truth; null in the test scene, where each frame takes state.truth
+  want: number;
+  frames: RecordedFrame[];
+  setup: Record<keyof typeof SETUP_NAMES, unknown>; // any change aborts the recording
+  lock: DatumLock | null; // the DATUM lock it started with; any change aborts it too
+  started: string; // ISO
+  lastFix: number; // performance.now() of the last frame with a target fix
+}
+
+const SETUP_NAMES = { source: 'the source', hfov: 'the field of view', size0: 'the origin marker size', size1: 'the target marker size' };
+const currentSetup = (): Recording['setup'] => ({ source: settings.source, hfov: settings.hfov, size0: settings.size0, size1: settings.size1 });
+
+const accSettings = loadSetting('accuracy', { height: 0, perPoint: 30 });
+const savedSession = loadSetting('accuracySession', { session: null as string | null, points: [] as RecordedPoint[] });
+
+const recorder = {
+  active: null as Recording | null,
+  session: typeof savedSession.session === 'string' ? savedSession.session : null, // ISO start of the session's first point
+  // a reload loses an unanswered post, so those count as not stored
+  points: (Array.isArray(savedSession.points) ? savedSession.points : [])
+    .filter((p) => typeof p?.line?.label === 'string' && Array.isArray(p.line.frames) && p.line.frames.length > 0)
+    .map((p) => ({ line: p.line, stored: p.stored === true })) as RecordedPoint[],
+  message: '',
+  messageClass: 'dim',
+};
+const saveSession = () => saveSetting('accuracySession', { session: recorder.session, points: recorder.points });
+
+const r5 = (v: number) => Math.round(v * 1e5) / 1e5; // 0.01 mm keeps the log readable
+const r5v = (v: Vec3): Vec3 => [r5(v[0]), r5(v[1]), r5(v[2])];
+const mean = (xs: number[]) => xs.reduce((s, x) => s + x, 0) / xs.length;
+
+/** The first unused label of the form P1, P2, ... */
+function nextLabel(): string {
+  const used = recorder.points.map((p) => Number(/^P(\d+)$/i.exec(p.line.label)?.[1] ?? 0));
+  return `P${Math.max(0, ...used) + 1}`;
+}
+
+function say(message: string, cls = 'dim'): void {
+  recorder.message = message;
+  recorder.messageClass = cls;
+}
+
+function refuse(message: string): false {
+  say(message, 'warn');
+  return false;
+}
+
+/**
+ * Start collecting the next n processed frames that have a target fix. Needs DATUM; without a lock the
+ * point is still recorded, but marked. Returns false (with the reason in recorder.message) when it cannot start.
+ */
+function startRecording(n = accSettings.perPoint): boolean {
+  if (recorder.active) return refuse('Already recording.');
+  if (lockPending) return refuse('Wait for the DATUM lock to finish.');
+  if (!datum()) return refuse('Needs DATUM first: put the origin marker in view.');
+  const source = settings.source === TEST ? 'test' : 'webcam';
+  if (recorder.points.some((p) => p.line.source !== source)) return refuse('This session has points from another source: press New session first.');
+  let truth: Vec3 | null = null;
+  if (settings.source !== TEST) {
+    const [x, y, z] = [accX.valueAsNumber, accY.valueAsNumber, accZ.valueAsNumber];
+    if (!Number.isFinite(x) || !Number.isFinite(z)) return refuse('Type the measured X and Z first (metres).');
+    if (!Number.isFinite(y)) return refuse('Type the height Y (0 when the target lies flat).');
+    if (Math.max(Math.abs(x), Math.abs(y), Math.abs(z)) > 30) return refuse('Over 30 m from the origin: type metres, not centimetres.');
+    // an upright marker's centre is at least half its side above the floor; Y 0 means it was not typed
+    if (state.target?.upright && y < settings.size1 / 2000) return refuse('The target stands upright: type the height of its centre (Y).');
+    truth = [x, y, z];
+  }
+  recorder.active = {
+    label: accLabel.value.trim() || nextLabel(),
+    truth,
+    want: Math.min(MAX_PER_POINT, Math.max(1, Math.round(n) || 1)),
+    frames: [],
+    setup: currentSetup(),
+    lock: state.lock,
+    started: new Date().toISOString(),
+    lastFix: performance.now(),
+  };
+  if (state.lock) say('');
+  else say('DATUM not locked: the point is recorded anyway and marked. Lock DATUM for a real run.', 'warn');
+  return true;
+}
+
+function stopRecording(message: string, cls = 'bad'): void {
+  recorder.active = null;
+  say(message, cls);
+}
+
+/** Called for every processed frame: adds it to the point being recorded, or aborts the recording. */
+function recordFrame(): void {
+  const rec = recorder.active;
+  if (!rec) return;
+  const setup = currentSetup();
+  const changed = (Object.keys(SETUP_NAMES) as (keyof typeof SETUP_NAMES)[]).find((k) => setup[k] !== rec.setup[k]);
+  if (changed) return stopRecording(`Aborted: ${SETUP_NAMES[changed]} changed.`);
+  if (!datum()) return stopRecording('Aborted: DATUM lost (origin marker not seen).');
+  if (state.lock !== rec.lock) return stopRecording('Aborted: DATUM was locked, unlocked or reset.');
+  const now = performance.now();
+  const T = state.target;
+  const truth = rec.truth ?? state.truth;
+  if (!T || !truth) {
+    if (now - rec.lastFix > NO_FIX_MS) stopRecording(`Aborted: target not seen for ${NO_FIX_MS / 1000} s.`);
+    return;
+  }
+  rec.lastFix = now;
+  rec.frames.push({
+    est: r5v(T.pos),
+    truth: r5v(truth),
+    sigma: r5(T.sigma),
+    range: r5(T.range),
+    floor: T.floor ? r5v(T.floor) : null,
+    rms: r5(T.rms),
+    upright: T.upright,
+  });
+  if (rec.frames.length >= rec.want) finishPoint(rec);
+}
+
+/** A point is complete: keep it for the session and send it to the PC. */
+function finishPoint(rec: Recording): void {
+  recorder.active = null;
+  recorder.session ??= rec.started;
+  const lock = rec.lock;
+  const point: RecordedPoint = {
+    line: {
+      event: 'point',
+      session: recorder.session,
+      id: rec.started,
+      label: rec.label,
+      source: rec.setup.source === TEST ? 'test' : 'webcam',
+      hfov: settings.hfov,
+      sizes: { origin: settings.size0 / 1000, target: settings.size1 / 1000 },
+      datum: lock ? { locked: true, frames: lock.frames, sigma: lock.sigma, angleSigma: lock.angleSigma } : { locked: false },
+      truth: rec.truth,
+      frames: rec.frames,
+    },
+    stored: null,
+  };
+  recorder.points.push(point);
+  saveSession();
+  accLabel.value = nextLabel();
+  accX.value = ''; // the next point is a new spot: its truth has to be typed again
+  accZ.value = '';
+  say(`${rec.label}: ${rec.frames.length} frames. Sending to the PC...`);
+  renderPoints();
+  postReport('accuracy', point.line).then((ok) => {
+    point.stored = ok;
+    saveSession();
+    renderPoints();
+    if (!recorder.active) {
+      if (ok) say(`${rec.label} stored on the PC.`, 'ok');
+      else say(`${rec.label} not stored: the PC did not answer. Download JSON keeps it.`, 'warn');
+    }
+  });
+}
+
+/** Remove the last point and put its label and truth back in the inputs, ready to record it again. */
+function undoPoint(): void {
+  const p = recorder.points.pop();
+  if (!p) return;
+  saveSession();
+  accLabel.value = p.line.label;
+  if (p.line.truth) [accX.value, accY.value, accZ.value] = p.line.truth.map(String);
+  // the PC log is append-only, so it gets a line naming the withdrawn point (harmless if it never arrived)
+  postReport('accuracy', { event: 'undo', session: p.line.session, id: p.line.id, label: p.line.label });
+  say(`Removed ${p.line.label}.`);
+  renderPoints();
+}
+
+function newSession(): void {
+  if (recorder.points.some((p) => !p.stored) && !confirm('Some points are not stored on the PC. Clear them anyway?')) return;
+  recorder.active = null;
+  recorder.session = null; // the next point starts a new session id
+  recorder.points = [];
+  saveSession();
+  accLabel.value = nextLabel();
+  say('New session.');
+  renderPoints();
+}
+
+/** Every point of the session, one per line like the PC's accuracy.jsonl, so `npm run accuracy -- <file>` reads it. */
+function downloadSession(): void {
+  if (!recorder.points.length || !recorder.session) return;
+  const text = recorder.points.map((p) => `${JSON.stringify(p.line)}\n`).join('');
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob([text], { type: 'application/x-ndjson' }));
+  a.download = `crosscue-accuracy-${recorder.session.replace(/\D+/g, '-').replace(/^-|-$/g, '')}.jsonl`;
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 1000);
 }
 
 // ---- drawing ----------------------------------------------------------------------------------
@@ -420,6 +645,47 @@ const f2 = (v: number) => v.toFixed(2);
 const cm = (v: number) => `${(v * 100).toFixed(1)} cm`;
 const vec = (v: Vec3) => `${f2(v[0])}, ${f2(v[1])}, ${f2(v[2])}`;
 const row = (k: string, v: string, cls = '') => `<div><span class="dim">${k}</span><b class="${cls}">${v}</b></div>`;
+const esc = (s: string) => s.replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`);
+
+/** The session's points and a summary over all their frames. Only redrawn when the list changes. */
+function renderPoints(): void {
+  const pts = recorder.points;
+  if (!pts.length) {
+    $('accPoints').innerHTML = '<div class="dim">No points in this session yet.</div>';
+    return;
+  }
+  const body = pts
+    .map((p) => {
+      const fr = p.line.frames;
+      const s = accuracyStats(fr)!;
+      const notes =
+        (p.line.datum.locked ? '' : '<br><span class="warn">DATUM not locked</span>') +
+        (p.stored === false ? '<br><span class="warn">not on the PC</span>' : p.stored === null ? '<br><span class="dim">sending</span>' : '');
+      return (
+        `<tr><td>${esc(p.line.label)}${notes}</td><td>${f2(mean(fr.map((f) => f.range)))} m</td><td>${s.n}</td>` +
+        `<td>${cm(Math.hypot(s.bias[0], s.bias[2]))}</td><td>${cm(s.spread)}</td><td>${cm(mean(fr.map((f) => f.sigma)))}</td></tr>`
+      );
+    })
+    .join('');
+  const all = pts.flatMap((p) => p.line.frames);
+  const s = accuracyStats(all)!;
+  const floor = accuracyStats(all, (f) => f.floor);
+  const stored = pts.filter((p) => p.stored).length;
+  $('accPoints').innerHTML =
+    '<table><thead><tr><th>Point</th><th>Range</th><th>n</th>' +
+    '<th title="Horizontal error of the mean estimate">Error</th>' +
+    '<th title="RMS scatter of the estimates around their mean">Spread</th>' +
+    '<th title="Mean expected error (1 sigma)">Sigma</th></tr></thead>' +
+    `<tbody>${body}</tbody></table>` +
+    row('Session', recorder.session ? new Date(recorder.session).toLocaleString() : '-') +
+    row('Points, frames', `${pts.length}, ${all.length}`) +
+    row('CEP50', cm(s.cep50)) +
+    row('CEP95', cm(s.cep95)) +
+    row('RMS 3D', cm(s.rms3d)) +
+    row('Sigma ratio', Number.isFinite(s.sigmaRatio) ? s.sigmaRatio.toFixed(2) : '-', s.sigmaRatio > 1.5 ? 'warn' : s.sigmaRatio > 0 ? 'ok' : '') +
+    (floor ? row('Floor ray CEP50', cm(floor.cep50)) + row('Floor ray CEP95', cm(floor.cep95)) : '') +
+    row('Stored on the PC', `${stored} of ${pts.length}`, stored === pts.length ? 'ok' : 'warn');
+}
 
 function panel(): void {
   $('hfovVal').textContent = `${settings.hfov.toFixed(1)} deg`;
@@ -479,13 +745,31 @@ function panel(): void {
     $('targetInfo').innerHTML = `<div class="dim">${datum() ? 'Target marker not seen.' : 'Needs DATUM first.'}</div>`;
   }
 
+  const test = settings.source === TEST;
+  accTruthEls.forEach((el) => (el.style.display = test ? 'none' : ''));
+  $('accTest').style.display = test ? '' : 'none';
+  const rec = recorder.active;
+  const accState = $('accState');
+  if (rec) {
+    accState.textContent = `Recording ${rec.frames.length}/${rec.want}${rec.lock ? '' : ', DATUM not locked'}`;
+    accState.className = rec.lock ? '' : 'warn';
+  } else {
+    accState.textContent = recorder.message;
+    accState.className = recorder.messageClass;
+  }
+  $<HTMLButtonElement>('accRecord').disabled = !!rec || lockPending;
+  $('accCancel').style.display = rec ? '' : 'none';
+  $<HTMLButtonElement>('accUndo').disabled = !!rec || !recorder.points.length;
+  $<HTMLButtonElement>('accNew').disabled = !!rec || (!recorder.points.length && !recorder.session);
+  $<HTMLButtonElement>('accDownload').disabled = !recorder.points.length;
+
   if (transport && settings.publish) {
     const st = transport.status;
     $('netInfo').innerHTML =
       row('Relay', st, st === 'open' ? 'ok' : 'warn') +
-      row('Neighbours', transport.neighbors().join(', ') || 'none') +
+      row('Neighbours', esc(transport.neighbors().join(', ')) || 'none') +
       row('Sent / dropped', `${transport.stats.sent} / ${transport.stats.dropped}`) +
-      (transport.notice ? row('Note', transport.notice, 'warn') : '');
+      (transport.notice ? row('Note', esc(transport.notice), 'warn') : ''); // the notice quotes the typed relay URL
   } else {
     $('netInfo').innerHTML = '';
   }
@@ -561,6 +845,33 @@ relayUrl.addEventListener('change', netChanged);
 nodeId.addEventListener('change', netChanged);
 publishBox.addEventListener('change', netChanged);
 
+const accLabel = $<HTMLInputElement>('accLabel');
+const accX = $<HTMLInputElement>('accX');
+const accZ = $<HTMLInputElement>('accZ');
+const accY = $<HTMLInputElement>('accY');
+const accN = $<HTMLInputElement>('accN');
+const accTruthEls = [...document.querySelectorAll<HTMLElement>('.acc-truth')];
+accLabel.value = nextLabel();
+accY.value = String(accSettings.height);
+accN.value = String(accSettings.perPoint);
+accY.addEventListener('change', () => {
+  if (!Number.isFinite(accY.valueAsNumber)) return;
+  accSettings.height = accY.valueAsNumber;
+  saveSetting('accuracy', accSettings);
+});
+accN.addEventListener('change', () => {
+  const n = Math.round(accN.valueAsNumber);
+  if (n >= 1) accSettings.perPoint = Math.min(MAX_PER_POINT, n);
+  accN.value = String(accSettings.perPoint);
+  saveSetting('accuracy', accSettings);
+});
+$('accRecord').addEventListener('click', () => startRecording());
+$('accCancel').addEventListener('click', () => stopRecording('Cancelled.', 'dim'));
+$('accUndo').addEventListener('click', undoPoint);
+$('accNew').addEventListener('click', newSession);
+$('accDownload').addEventListener('click', downloadSession);
+renderPoints();
+
 // ---- loop -------------------------------------------------------------------------------------
 
 // A timer, not requestAnimationFrame: processing should keep going while the window is not painted.
@@ -584,9 +895,12 @@ listCameras().then(() => useSource(sourceSel.value)).then(() => {
 
 window.addEventListener('beforeunload', () => transport?.close());
 
-// Debug handle for the browser console: __obs.step() processes one frame right away.
+// Debug handle for the browser console: __obs.step() processes one frame right away, and
+// __obs.record(5) followed by five steps records a point in the test scene synchronously.
 const step = () => {
   const img = grabFrame(performance.now() / 1000);
   if (img) process(img);
 };
-(window as unknown as { __obs: unknown }).__obs = { state, settings, datum, step };
+const record = (n?: number) => startRecording(n);
+const cancel = () => stopRecording('Cancelled.', 'dim');
+(window as unknown as { __obs: unknown }).__obs = { state, settings, datum, step, recorder, record, cancel };

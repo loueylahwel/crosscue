@@ -10,7 +10,8 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",
-    "relay": "tsx server/relay.ts"
+    "relay": "tsx server/relay.ts",
+    "accuracy": "tsx tools/accuracy.ts"
   },
   "dependencies": {
     "three": "^0.186.1"

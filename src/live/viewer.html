@@ -10,16 +10,30 @@
       .grid input { width: 100%; }
       canvas.map { width: 100%; aspect-ratio: 1; display: block; background: #070b10; border: 1px solid var(--line); border-radius: 10px; }
       #tracks div { display: flex; justify-content: space-between; gap: 8px; font-variant-numeric: tabular-nums; }
+      #checks div { font-variant-numeric: tabular-nums; }
+      #checks .sess { color: var(--text); margin-top: 6px; }
 
       /* AR overlay (shown over the camera image during the session) */
       #overlay { display: none; position: fixed; inset: 0; font: 15px/1.4 system-ui, sans-serif; color: #fff; }
-      #overlay .bar { position: absolute; left: 10px; right: 10px; padding: 10px 12px; border-radius: 12px;
+      #overlay .bar { padding: 10px 12px; border-radius: 12px;
         background: rgba(8, 12, 17, 0.72); border: 1px solid rgba(255, 255, 255, 0.12); }
-      #overlay .top { top: 10px; }
-      #overlay .bottom { bottom: 14px; display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+      /* top and bottom stacks: each grows away from its edge when a bar wraps or the check panel opens; the stacks
+         themselves let taps through to the floor, and the top one is drawn over the map */
+      #overlay .top, #overlay .dock { position: absolute; left: 10px; right: 10px; display: flex; flex-direction: column; gap: 8px; pointer-events: none; }
+      #overlay .top > *, #overlay .dock > * { pointer-events: auto; }
+      #overlay .top { top: 10px; z-index: 1; }
+      #overlay .dock { bottom: 14px; }
+      #overlay .bottom { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
       #overlay button { font-size: 15px; padding: 9px 14px; }
       #overlay .status { flex: 1; min-width: 120px; font-size: 13px; color: #cbd5e1; }
-      #overlay canvas.map { position: absolute; right: 10px; bottom: 76px; width: 34vw; max-width: 180px; opacity: 0.9; }
+      #overlay canvas.map { align-self: flex-end; width: 34vw; max-width: 180px; opacity: 0.9; }
+      #checkPanel .hint { font-size: 13px; color: #cbd5e1; }
+      #checkPanel .xz { display: grid; grid-template-columns: auto 1fr auto auto 1fr auto; gap: 6px; align-items: center; margin-top: 6px; }
+      #checkPanel .row { margin: 6px 0 0; }
+      #checkPanel input { font-size: 16px; padding: 8px 10px; min-width: 0; width: 100%; }
+      #checkPanel .row input { flex: 1; width: auto; }
+      #overlay button.sign { padding: 9px 10px; }
+      #checkNote { margin-top: 6px; }
       #labels { position: absolute; inset: 0; pointer-events: none; overflow: hidden; }
       .label { position: absolute; left: 0; top: 0; white-space: nowrap; padding: 3px 9px; border-radius: 999px;
         border: 1.5px solid currentColor; background: rgba(8, 12, 17, 0.78); font-size: 13px; display: flex; gap: 6px; align-items: center; }
@@ -33,7 +47,8 @@
       <h1>CROSSCUE viewer</h1>
       <p class="dim">
         Shows every target the other nodes report, at its real place, through walls. Start AR, then align with the
-        origin marker by tapping its centre and the middle of its right-hand edge.
+        origin marker by tapping its centre and the middle of its right-hand edge. Once aligned, Check compares a
+        tap with a tape-measured spot, or the target's track with where the target really stands.
       </p>
       <div class="grid">
         <label for="relayUrl">Relay</label><input id="relayUrl" type="text" />
@@ -48,16 +63,47 @@
       <canvas id="mapStart" class="map" width="600" height="600"></canvas>
       <h2>Tracks</h2>
       <div id="tracks" class="dim">None yet.</div>
+      <h2>Checks</h2>
+      <div id="checks" class="dim">None yet.</div>
     </main>
 
     <div id="overlay">
       <div id="labels"></div>
-      <div class="bar top" id="instruction"></div>
-      <canvas id="mapAr" class="map" width="360" height="360"></canvas>
-      <div class="bar bottom">
-        <button id="realign">Re-align</button>
-        <button id="exit">Exit</button>
-        <span class="status" id="arStatus"></span>
+      <div class="top">
+        <div class="bar" id="instruction"></div>
+        <div class="bar" id="checkPanel" hidden>
+          <div id="checkEdit">
+            <div class="hint">Metres from the origin marker's centre: +X its right-hand edge, +Z its printed bottom edge.</div>
+            <div class="xz">
+              <label for="checkX">X</label>
+              <input id="checkX" type="text" inputmode="decimal" autocomplete="off" placeholder="m" />
+              <button id="checkXSign" class="sign" aria-label="Change the sign of X">+/-</button>
+              <label for="checkZ">Z</label>
+              <input id="checkZ" type="text" inputmode="decimal" autocomplete="off" placeholder="m" />
+              <button id="checkZSign" class="sign" aria-label="Change the sign of Z">+/-</button>
+            </div>
+            <div class="row">
+              <label for="checkLabel">Label</label>
+              <input id="checkLabel" type="text" maxlength="40" autocomplete="off" />
+              <button id="checkClose">Close</button>
+            </div>
+          </div>
+          <div class="row">
+            <button id="checkPoint">Tap known point</button>
+            <button id="checkTarget">Tap target foot</button>
+          </div>
+          <div id="checkNote"></div>
+          <div id="checkSummary" class="hint"></div>
+        </div>
+      </div>
+      <div class="dock">
+        <canvas id="mapAr" class="map" width="360" height="360"></canvas>
+        <div class="bar bottom">
+          <button id="realign">Re-align</button>
+          <button id="check" hidden>Check</button>
+          <button id="exit">Exit</button>
+          <span class="status" id="arStatus"></span>
+        </div>
       </div>
     </div>
     <script type="module" src="./viewer.ts"></script>

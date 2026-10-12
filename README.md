@@ -82,7 +82,7 @@ npm run relay
 | Page (on the PC, http://localhost:5173/...) | What it does |
 |---|---|
 | `src/live/markers.html` | Printable marker sheets: the origin (ID 0) and the target (ID 1), ArUco ARUCO_MIP_36h12 at an exact size in millimetres, with a 100 mm line to check the printer did not scale |
-| `src/live/observer.html` | Webcam observer: detects both markers, defines DATUM from the origin, computes the target's position in the shared frame with an expected error, and publishes it over the relay. Has a built-in test scene with known truth, so it can be tried without a webcam |
+| `src/live/observer.html` | Webcam observer: detects both markers, defines DATUM from the origin, computes the target's position in the shared frame with an expected error, and publishes it over the relay. Records accuracy points against tape-measured positions. Has a built-in test scene with known truth, so it can be tried without a webcam |
 | `src/live/xrcheck.html` | Phone check: reports what the phone's browser supports for AR (WebXR session, hit test, DOM overlay, camera access, depth, anchors) and sends the report back to the PC |
 
 Observer, step by step:
@@ -96,6 +96,20 @@ Observer, step by step:
 5. Press Lock DATUM (30 frames are averaged; outlier frames are dropped). The grid drawn on the floor should
    sit on the real floor.
 6. Tick Publish. Every node connected to the relay receives the sightings.
+
+**Accuracy runs.** With DATUM locked, put the target at 5 to 8 spots 1 to 6 m from the camera. For each spot,
+measure with a tape where the centre of the target's black square is in W (X towards the origin marker's right-hand
+edge and Z towards its printed bottom edge, both from its centre, and its height above the floor), type it into the
+observer's Accuracy section and press Record point. The observer keeps every frame of the point (30 by default), shows
+the error per point and sends the point to the PC, which appends it to `.local/reports/accuracy.jsonl`. Then:
+
+```bash
+npm run accuracy
+```
+
+This prints the errors of the latest session per point, by distance and overall, including CEP50 and CEP95: the
+radius around the true position, measured on the floor plan, that holds 50% (or 95%) of the estimates.
+`npm run accuracy -- --all` covers every session.
 
 A phone on USB reaches the PC's pages and relay through `adb reverse`, which Chrome treats as a secure origin:
 
@@ -136,11 +150,13 @@ src/core/          pure TypeScript, no DOM, unit-tested
   simNetwork.ts      deterministic radio simulator (range, loss, latency) implementing Transport
   geometry.ts        wall line of sight, field of view, collisions
   camera.ts          marker pose from four corners, floor ray, DATUM from the origin marker, error model
+  accuracy.ts        scoring against known truth: CEP50 / CEP95, RMS, bias, sigma ratio
 src/sim/           SANDTABLE: world, simulation engine, Three.js scene, HUD
 src/live/          FTX pages: markers, observer, xrcheck; marker detection, sub-pixel corners,
                    FOV calibration, synthetic test images, WebSocket transport
 src/vendor/        js-aruco2 marker detector (MIT), as ES modules
 server/relay.ts    FTX WebSocket relay
+tools/accuracy.ts  accuracy report from the observer's recorded points (npm run accuracy)
 tests/             vitest suites
 docs/protocol.md   language-neutral message format
 ```
